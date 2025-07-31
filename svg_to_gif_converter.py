@@ -6,6 +6,7 @@ import subprocess
 import os
 import tempfile
 import time
+import threading
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service as ChromeService
 from webdriver_manager.chrome import ChromeDriverManager
@@ -91,7 +92,6 @@ class SvgToGifConverter(tk.Tk):
                 messagebox.showerror("SVG Error", "Could not determine the dimensions of the selected SVG file.")
 
     def start_conversion(self):
-        print("\n--- Starting Conversion Process ---")
         if not self.svg_filepath:
             messagebox.showerror("Error", "Please select an SVG file first.")
             return
@@ -106,54 +106,53 @@ class SvgToGifConverter(tk.Tk):
             filetypes=(("GIF files", "*.gif"), ("All files", "*.*"))
         )
         if not output_filepath:
-            print("Save cancelled by user.")
+            self.status_label.config(text="Save cancelled.")
             return
 
         self.convert_button.config(state="disabled")
         self.status_label.config(text="Converting...")
-        self.update_idletasks()
 
+        thread = threading.Thread(target=self._conversion_thread, args=(output_filepath,))
+        thread.daemon = True
+        thread.start()
+
+    def _conversion_thread(self, output_filepath):
         try:
-            print("1. Analyzing SVG...")
             width, height = self.get_svg_size(self.svg_filepath)
             if not width or not height:
-                messagebox.showerror("Error", "Could not determine SVG dimensions.")
+                self.update_status("Error: Could not determine SVG dimensions.")
                 return
 
             loop = self.loop_var.get()
             duration = self.duration_var.get()
             fps = self.fps_var.get()
-            print(f"Parameters: Size={width}x{height}, Duration={duration}s, FPS={fps}")
 
             temp_dir = tempfile.mkdtemp(prefix="svg2gif_")
-            print(f"2. Created temp directory: {temp_dir}")
 
-            print("3. Rendering frames...")
             render_success = self.render_frames(self.svg_filepath, temp_dir, width, height, duration, fps)
             if not render_success:
-                messagebox.showerror("Error", "Frame rendering failed.")
+                self.update_status("Frame rendering failed.")
                 return
 
-            print("4. Assembling GIF...")
             gif_success = self.create_gif(temp_dir, output_filepath, loop, duration, fps)
             if gif_success:
-                print("5. GIF creation successful!")
-                messagebox.showinfo("Success", f"GIF saved to:\n{output_filepath}")
+                self.update_status("Conversion complete!")
+                self.after(0, lambda: messagebox.showinfo("Success", f"GIF saved to:\n{output_filepath}"))
             else:
-                print("!!! GIF creation failed.")
-                messagebox.showerror("Error", "Failed to create the final GIF.")
+                self.update_status("GIF creation failed.")
 
         except Exception as e:
-            print(f"!!! An unexpected error occurred: {e}")
-            messagebox.showerror("Error", f"An unexpected error occurred:\n{e}")
+            self.update_status(f"An error occurred: {e}")
         finally:
-            print("6. Cleaning up and finishing.")
             if 'temp_dir' in locals() and os.path.exists(temp_dir):
                 for f in os.listdir(temp_dir):
                     os.remove(os.path.join(temp_dir, f))
                 os.rmdir(temp_dir)
-            self.convert_button.config(state="normal")
-            self.status_label.config(text="Ready.")
+            self.after(0, lambda: self.convert_button.config(state="normal"))
+            self.after(0, lambda: self.status_label.config(text="Ready."))
+
+    def update_status(self, message):
+        self.after(0, lambda: self.status_label.config(text=message))
 
     def is_animated(self, svg_path):
         try:
@@ -186,6 +185,7 @@ class SvgToGifConverter(tk.Tk):
             return None, None
 
     def render_frames(self, svg_path, output_dir, width, height, duration, fps):
+        self.update_status("Rendering frames...")
         options = webdriver.ChromeOptions()
         options.add_argument('--headless')
         options.add_argument('--no-sandbox')
@@ -195,7 +195,6 @@ class SvgToGifConverter(tk.Tk):
             service = ChromeService(ChromeDriverManager().install())
             driver = webdriver.Chrome(service=service, options=options)
 
-            # Prepare a simple HTML wrapper to ensure clean background
             html_content = f"""
             <html>
             <body style='margin:0; padding:0; background:transparent; overflow: hidden;'>
@@ -213,15 +212,17 @@ class SvgToGifConverter(tk.Tk):
             num_frames = int(duration * fps)
             time_per_frame = 1.0 / fps
             for i in range(num_frames):
+                self.update_status(f"Rendering frame {i+1}/{num_frames}")
                 driver.save_screenshot(os.path.join(output_dir, f"frame_{i:04d}.png"))
                 time.sleep(time_per_frame)
             driver.quit()
             return True
         except Exception as e:
-            print(f"!!! Frame rendering failed: {e}")
+            self.update_status(f"Frame rendering failed: {e}")
             return False
 
     def create_gif(self, frames_dir, output_path, loop, duration, fps):
+        self.update_status("Assembling GIF...")
         try:
             files = sorted([os.path.join(frames_dir, f) for f in os.listdir(frames_dir) if f.endswith('.png')])
             if not files: return False
@@ -235,7 +236,7 @@ class SvgToGifConverter(tk.Tk):
             )
             return True
         except Exception as e:
-            print(f"!!! GIF creation failed: {e}")
+            self.update_status(f"GIF creation failed: {e}")
             return False
 
 if __name__ == "__main__":
