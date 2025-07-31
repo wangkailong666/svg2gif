@@ -1,6 +1,6 @@
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
-from PIL import Image, ImageTk
+from PIL import Image
 from lxml import etree
 import subprocess
 import os
@@ -24,19 +24,20 @@ class SvgToGifConverter(tk.Tk):
         self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
 
-        # --- File Selection ---
         file_frame = ttk.LabelFrame(main_frame, text="SVG File")
         file_frame.grid(row=0, column=0, columnspan=2, sticky=(tk.W, tk.E), padx=5, pady=5)
 
         self.filepath_label = ttk.Label(file_frame, text="No file selected.")
         self.filepath_label.grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
 
+        self.size_label = ttk.Label(file_frame, text="")
+        self.size_label.grid(row=1, column=0, padx=5, pady=2, sticky=tk.W)
+
         self.select_button = ttk.Button(file_frame, text="Select SVG", command=self.select_svg_file)
         self.select_button.grid(row=0, column=1, padx=5, pady=5, sticky=tk.E)
 
         self.svg_filepath = None
 
-        # --- Preview ---
         preview_frame = ttk.LabelFrame(main_frame, text="Preview")
         preview_frame.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), padx=5, pady=5)
 
@@ -44,7 +45,6 @@ class SvgToGifConverter(tk.Tk):
         self.preview_canvas.grid(row=0, column=0, padx=5, pady=5)
         self.preview_canvas.create_text(200, 150, text="SVG Preview Area", fill="grey")
 
-        # --- GIF Parameters ---
         params_frame = ttk.LabelFrame(main_frame, text="GIF Parameters")
         params_frame.grid(row=2, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=5, pady=5)
 
@@ -64,7 +64,10 @@ class SvgToGifConverter(tk.Tk):
         self.fps_spinbox = ttk.Spinbox(params_frame, from_=2, to=30, increment=1, textvariable=self.fps_var)
         self.fps_spinbox.grid(row=2, column=1, sticky=tk.W, padx=5, pady=2)
 
-        # --- Conversion ---
+        self.crop_var = tk.BooleanVar(value=False)
+        crop_check = ttk.Checkbutton(params_frame, text="Auto-crop whitespace", variable=self.crop_var, onvalue=True, offvalue=False)
+        crop_check.grid(row=3, column=0, columnspan=2, sticky=tk.W, padx=5, pady=5)
+
         convert_frame = ttk.Frame(main_frame)
         convert_frame.grid(row=2, column=1, sticky=(tk.W, tk.E, tk.S), padx=5, pady=5)
 
@@ -82,202 +85,179 @@ class SvgToGifConverter(tk.Tk):
         if filepath:
             self.svg_filepath = filepath
             self.filepath_label.config(text=os.path.basename(filepath))
-            self.status_label.config(text="File selected. Ready to convert.")
-            # self.preview_svg() # We will implement this later
+
+            width, height = self.get_svg_size(filepath)
+            if width and height:
+                self.size_label.config(text=f"Detected Size: {width} x {height}")
+                self.status_label.config(text="File selected. Ready to convert.")
+            else:
+                self.size_label.config(text="Could not detect size.")
+                messagebox.showerror("SVG Error", "Could not determine the dimensions of the selected SVG file.")
 
     def start_conversion(self):
+        print("\n--- Starting Conversion Process ---")
         if not self.svg_filepath:
             messagebox.showerror("Error", "Please select an SVG file first.")
             return
 
-        self.status_label.config(text="Analyzing SVG...")
-        self.update_idletasks()
-
-        # Check for animation
         if not self.is_animated(self.svg_filepath):
-            proceed = messagebox.askyesno(
-                "No Animation Detected",
-                "This SVG does not appear to be animated. "
-                "Do you want to continue and create a static GIF?"
-            )
-            if not proceed:
-                self.status_label.config(text="Conversion cancelled.")
+            if not messagebox.askyesno("No Animation", "No animation detected. Create a static GIF?"):
                 return
 
-        # Get SVG dimensions
-        width, height = self.get_svg_size(self.svg_filepath)
-        if not width or not height:
-            messagebox.showerror("Error", "Could not determine SVG dimensions.")
-            self.status_label.config(text="Error: Invalid SVG size.")
-            return
-
-        # Get parameters from UI
-        loop = self.loop_var.get()
-        duration = self.duration_var.get()
-        fps = self.fps_var.get()
-
-        # Ask for output file path
         output_filepath = filedialog.asksaveasfilename(
             title="Save GIF as...",
             defaultextension=".gif",
             filetypes=(("GIF files", "*.gif"), ("All files", "*.*"))
         )
         if not output_filepath:
-            self.status_label.config(text="Save cancelled.")
+            print("Save cancelled by user.")
             return
 
-        # Create a temporary directory for frames
-        temp_dir = tempfile.mkdtemp(prefix="svg2gif_")
+        self.convert_button.config(state="disabled")
+        self.status_label.config(text="Converting...")
+        self.update_idletasks()
 
         try:
-            # 1. Render frames
-            self.status_label.config(text="Rendering frames...")
-            render_success = self.render_frames(self.svg_filepath, temp_dir, width, height, duration, fps)
-
-            if not render_success:
-                self.status_label.config(text="Frame rendering failed.")
+            print("1. Analyzing SVG...")
+            width, height = self.get_svg_size(self.svg_filepath)
+            if not width or not height:
+                messagebox.showerror("Error", "Could not determine SVG dimensions.")
                 return
 
-            # 2. Create GIF
-            self.status_label.config(text="Assembling GIF...")
+            loop = self.loop_var.get()
+            duration = self.duration_var.get()
+            fps = self.fps_var.get()
+            print(f"Parameters: Size={width}x{height}, Duration={duration}s, FPS={fps}")
+
+            temp_dir = tempfile.mkdtemp(prefix="svg2gif_")
+            print(f"2. Created temp directory: {temp_dir}")
+
+            print("3. Rendering frames...")
+            render_success = self.render_frames(self.svg_filepath, temp_dir, width, height, duration, fps)
+            if not render_success:
+                messagebox.showerror("Error", "Frame rendering failed.")
+                return
+
+            print("4. Assembling GIF...")
             gif_success = self.create_gif(temp_dir, output_filepath, loop, duration, fps)
-
             if gif_success:
-                messagebox.showinfo("Success", f"GIF saved successfully to:\n{output_filepath}")
-                self.status_label.config(text="Conversion complete!")
+                print("5. GIF creation successful!")
+                messagebox.showinfo("Success", f"GIF saved to:\n{output_filepath}")
             else:
-                self.status_label.config(text="GIF creation failed.")
+                print("!!! GIF creation failed.")
+                messagebox.showerror("Error", "Failed to create the final GIF.")
 
+        except Exception as e:
+            print(f"!!! An unexpected error occurred: {e}")
+            messagebox.showerror("Error", f"An unexpected error occurred:\n{e}")
         finally:
-            # 3. Cleanup
-            for f in os.listdir(temp_dir):
-                os.remove(os.path.join(temp_dir, f))
-            os.rmdir(temp_dir)
+            print("6. Cleaning up and finishing.")
+            if 'temp_dir' in locals() and os.path.exists(temp_dir):
+                for f in os.listdir(temp_dir):
+                    os.remove(os.path.join(temp_dir, f))
+                os.rmdir(temp_dir)
+            self.convert_button.config(state="normal")
+            self.status_label.config(text="Ready.")
 
     def is_animated(self, svg_path):
-        """Check if the SVG has animation tags."""
         try:
-            tree = etree.parse(svg_path)
-            root = tree.getroot()
-            # The namespace is often present in SVG files, so we need to handle it.
+            with open(svg_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            if '@keyframes' in content: return True
+            tree = etree.fromstring(content.encode('utf-8'))
             ns = {'svg': 'http://www.w3.org/2000/svg'}
-            animation_tags = [
-                'animate', 'animateMotion', 'animateTransform',
-                'animateColor', 'set'
-            ]
-            for tag in animation_tags:
-                if root.find(f'.//svg:{tag}', namespaces=ns) is not None:
+            for tag in ['animate', 'animateMotion', 'animateTransform', 'animateColor', 'set']:
+                if tree.find(f'.//svg:{tag}', namespaces=ns) is not None:
                     return True
             return False
-        except Exception as e:
-            print(f"Error checking for animation: {e}")
+        except:
             return False
 
     def get_svg_size(self, svg_path):
-        """Get the width and height from the SVG file."""
         try:
             tree = etree.parse(svg_path)
             root = tree.getroot()
-            width_str = root.get('width')
-            height_str = root.get('height')
-
-            # Simple parsing, removing 'px'
-            width = int(float(width_str.replace('px', '')))
-            height = int(float(height_str.replace('px', '')))
-
-            return width, height
-        except Exception as e:
-            print(f"Error getting SVG size: {e}")
+            width, height = root.get('width'), root.get('height')
+            if width and height:
+                return int(float(''.join(filter(str.isdigit, width)))), int(float(''.join(filter(str.isdigit, height))))
+            viewbox = root.get('viewBox')
+            if viewbox:
+                parts = viewbox.split()
+                if len(parts) == 4:
+                    return int(float(parts[2])), int(float(parts[3]))
+            return None, None
+        except:
             return None, None
 
     def render_frames(self, svg_path, output_dir, width, height, duration, fps):
-        """Render SVG frames to PNG images using a headless browser."""
         options = webdriver.ChromeOptions()
         options.add_argument('--headless')
         options.add_argument('--no-sandbox')
         options.add_argument('--disable-dev-shm-usage')
         options.add_argument(f'--window-size={width},{height}')
-
-        service = ChromeService(ChromeDriverManager().install())
-        driver = webdriver.Chrome(service=service, options=options)
-
         try:
-            # Load the SVG file
+            service = ChromeService(ChromeDriverManager().install())
+            driver = webdriver.Chrome(service=service, options=options)
             abs_svg_path = os.path.abspath(svg_path)
             driver.get(f"file://{abs_svg_path}")
-            time.sleep(1) # Allow SVG to load
-
+            time.sleep(1)
             svg_element = driver.find_element(By.TAG_NAME, "svg")
-
             num_frames = int(duration * fps)
-            time_step = 1.0 / fps
-
+            time_per_frame = 1.0 / fps
             for i in range(num_frames):
-                current_time = i * time_step
-                # Use JS to set the animation time
-                driver.execute_script(f"document.documentElement.setCurrentTime({current_time});")
-
-                frame_path = os.path.join(output_dir, f"frame_{i:04d}.png")
-                svg_element.screenshot(frame_path)
-
-                self.status_label.config(text=f"Rendering frame {i+1}/{num_frames}")
-                self.update_idletasks()
-
-            return True
-        except Exception as e:
-            messagebox.showerror("Rendering Error", f"Failed to render frames: {e}")
-            return False
-        finally:
+                svg_element.screenshot(os.path.join(output_dir, f"frame_{i:04d}.png"))
+                time.sleep(time_per_frame)
             driver.quit()
-
-    def crop_image(self, image_path):
-        """Crop the transparent border of an image."""
-        try:
-            image = Image.open(image_path)
-            bbox = image.getbbox()
-            if bbox:
-                cropped_image = image.crop(bbox)
-                cropped_image.save(image_path)
             return True
         except Exception as e:
-            print(f"Could not crop {image_path}: {e}")
+            print(f"!!! Frame rendering failed: {e}")
             return False
 
     def create_gif(self, frames_dir, output_path, loop, duration, fps):
-        """Create a GIF from a directory of frames."""
-        self.status_label.config(text="Creating GIF...")
-        self.update_idletasks()
-
         try:
+            files = sorted([os.path.join(frames_dir, f) for f in os.listdir(frames_dir) if f.endswith('.png')])
+            if not files: return False
+
             frames = []
-            frame_files = sorted([os.path.join(frames_dir, f) for f in os.listdir(frames_dir) if f.endswith('.png')])
 
-            for frame_file in frame_files:
-                self.crop_image(frame_file)
-                frames.append(Image.open(frame_file))
+            # Decide whether to crop based on the checkbox
+            if self.crop_var.get():
+                print("Auto-cropping enabled.")
+                master_bbox = None
+                for f in files:
+                    img = Image.open(f)
+                    bbox = img.getbbox()
+                    if bbox:
+                        if master_bbox is None:
+                            master_bbox = list(bbox)
+                        else:
+                            master_bbox[0] = min(master_bbox[0], bbox[0])
+                            master_bbox[1] = min(master_bbox[1], bbox[1])
+                            master_bbox[2] = max(master_bbox[2], bbox[2])
+                            master_bbox[3] = max(master_bbox[3], bbox[3])
 
-            if not frames:
-                messagebox.showerror("Error", "No frames were generated.")
-                return False
+                for f in files:
+                    img = Image.open(f)
+                    if master_bbox:
+                        frames.append(img.crop(master_bbox))
+                    else:
+                        frames.append(img)
+            else:
+                print("Auto-cropping disabled. Using full frames.")
+                for f in files:
+                    frames.append(Image.open(f))
 
-            frame_duration_ms = int(1000 / fps)
+            if not frames: return False
 
-            # The loop parameter in Pillow is 0 for infinite, or a number for repetitions.
             loop_count = 0 if loop == "Forever" else int(loop)
-
             frames[0].save(
-                output_path,
-                save_all=True,
-                append_images=frames[1:],
-                duration=frame_duration_ms,
-                loop=loop_count,
-                disposal=2  # Dispose of the previous frame
+                output_path, save_all=True, append_images=frames[1:],
+                duration=int(1000 / fps), loop=loop_count, disposal=2
             )
             return True
         except Exception as e:
-            messagebox.showerror("GIF Creation Error", f"Failed to create GIF: {e}")
+            print(f"!!! GIF creation failed: {e}")
             return False
-
 
 if __name__ == "__main__":
     app = SvgToGifConverter()
