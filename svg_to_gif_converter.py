@@ -64,10 +64,6 @@ class SvgToGifConverter(tk.Tk):
         self.fps_spinbox = ttk.Spinbox(params_frame, from_=2, to=30, increment=1, textvariable=self.fps_var)
         self.fps_spinbox.grid(row=2, column=1, sticky=tk.W, padx=5, pady=2)
 
-        self.crop_var = tk.BooleanVar(value=False)
-        crop_check = ttk.Checkbutton(params_frame, text="Auto-crop whitespace", variable=self.crop_var, onvalue=True, offvalue=False)
-        crop_check.grid(row=3, column=0, columnspan=2, sticky=tk.W, padx=5, pady=5)
-
         convert_frame = ttk.Frame(main_frame)
         convert_frame.grid(row=2, column=1, sticky=(tk.W, tk.E, tk.S), padx=5, pady=5)
 
@@ -198,14 +194,26 @@ class SvgToGifConverter(tk.Tk):
         try:
             service = ChromeService(ChromeDriverManager().install())
             driver = webdriver.Chrome(service=service, options=options)
-            abs_svg_path = os.path.abspath(svg_path)
-            driver.get(f"file://{abs_svg_path}")
+
+            # Prepare a simple HTML wrapper to ensure clean background
+            html_content = f"""
+            <html>
+            <body style='margin:0; padding:0; background:transparent; overflow: hidden;'>
+                <img src='file://{os.path.abspath(svg_path)}'>
+            </body>
+            </html>
+            """
+            html_path = os.path.join(tempfile.gettempdir(), 'svg_wrapper.html')
+            with open(html_path, 'w') as f:
+                f.write(html_content)
+
+            driver.get(f"file://{html_path}")
             time.sleep(1)
-            svg_element = driver.find_element(By.TAG_NAME, "svg")
+
             num_frames = int(duration * fps)
             time_per_frame = 1.0 / fps
             for i in range(num_frames):
-                svg_element.screenshot(os.path.join(output_dir, f"frame_{i:04d}.png"))
+                driver.save_screenshot(os.path.join(output_dir, f"frame_{i:04d}.png"))
                 time.sleep(time_per_frame)
             driver.quit()
             return True
@@ -218,36 +226,7 @@ class SvgToGifConverter(tk.Tk):
             files = sorted([os.path.join(frames_dir, f) for f in os.listdir(frames_dir) if f.endswith('.png')])
             if not files: return False
 
-            frames = []
-
-            # Decide whether to crop based on the checkbox
-            if self.crop_var.get():
-                print("Auto-cropping enabled.")
-                master_bbox = None
-                for f in files:
-                    img = Image.open(f)
-                    bbox = img.getbbox()
-                    if bbox:
-                        if master_bbox is None:
-                            master_bbox = list(bbox)
-                        else:
-                            master_bbox[0] = min(master_bbox[0], bbox[0])
-                            master_bbox[1] = min(master_bbox[1], bbox[1])
-                            master_bbox[2] = max(master_bbox[2], bbox[2])
-                            master_bbox[3] = max(master_bbox[3], bbox[3])
-
-                for f in files:
-                    img = Image.open(f)
-                    if master_bbox:
-                        frames.append(img.crop(master_bbox))
-                    else:
-                        frames.append(img)
-            else:
-                print("Auto-cropping disabled. Using full frames.")
-                for f in files:
-                    frames.append(Image.open(f))
-
-            if not frames: return False
+            frames = [Image.open(f) for f in files]
 
             loop_count = 0 if loop == "Forever" else int(loop)
             frames[0].save(
