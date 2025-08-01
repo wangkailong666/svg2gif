@@ -264,6 +264,12 @@ class SvgToGifConverter(tk.Tk):
     def resize_and_paste_frame(self, frame_path, output_width, output_height):
         try:
             frame = Image.open(frame_path).convert("RGBA")
+
+            # Scale the original frame down to 95%
+            scale_factor = 0.95
+            new_size = (int(frame.width * scale_factor), int(frame.height * scale_factor))
+            frame = frame.resize(new_size, Image.Resampling.LANCZOS)
+
             new_frame = Image.new("RGBA", (output_width, output_height), "WHITE")
             paste_x = (output_width - frame.width) // 2
             paste_y = 0 # Align to top
