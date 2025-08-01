@@ -265,7 +265,7 @@ class SvgToGifConverter(tk.Tk):
             frame = Image.open(frame_path).convert("RGBA")
             new_frame = Image.new("RGBA", (output_width, output_height), "WHITE")
             paste_x = (output_width - frame.width) // 2
-            paste_y = (output_height - frame.height) // 2
+            paste_y = 0 # Align to top
             new_frame.paste(frame, (paste_x, paste_y), mask=frame)
             new_frame.save(frame_path)
             return True
