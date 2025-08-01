@@ -229,6 +229,9 @@ class SvgToGifConverter(tk.Tk):
         options.add_argument('--headless')
         options.add_argument('--no-sandbox')
         options.add_argument('--disable-dev-shm-usage')
+        # Suppress non-critical browser logging
+        options.add_experimental_option('excludeSwitches', ['enable-logging'])
+        options.add_argument('--log-level=3')
         # Add some vertical padding to prevent browser chrome from cutting off the bottom
         options.add_argument(f'--window-size={width},{height + 50}')
         try:
@@ -265,8 +268,8 @@ class SvgToGifConverter(tk.Tk):
         try:
             frame = Image.open(frame_path).convert("RGBA")
 
-            # Scale the original frame down to 95%
-            scale_factor = 0.95
+            # Scale the original frame down to 90%
+            scale_factor = 0.90
             new_size = (int(frame.width * scale_factor), int(frame.height * scale_factor))
             frame = frame.resize(new_size, Image.Resampling.LANCZOS)
 
