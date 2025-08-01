@@ -65,6 +65,27 @@ class SvgToGifConverter(tk.Tk):
         self.fps_spinbox = ttk.Spinbox(params_frame, from_=2, to=30, increment=1, textvariable=self.fps_var)
         self.fps_spinbox.grid(row=2, column=1, sticky=tk.W, padx=5, pady=2)
 
+        # --- Custom Size ---
+        size_frame = ttk.LabelFrame(main_frame, text="Output Size")
+        size_frame.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), padx=5, pady=5)
+
+        self.use_custom_size_var = tk.BooleanVar(value=False)
+        self.custom_size_check = ttk.Checkbutton(
+            size_frame, text="Use Custom Size", variable=self.use_custom_size_var,
+            command=self.toggle_custom_size_fields
+        )
+        self.custom_size_check.grid(row=0, column=0, columnspan=2, sticky=tk.W, padx=5, pady=2)
+
+        ttk.Label(size_frame, text="Width:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=2)
+        self.custom_width_var = tk.IntVar()
+        self.width_spinbox = ttk.Spinbox(size_frame, from_=1, to=4096, textvariable=self.custom_width_var, state="disabled")
+        self.width_spinbox.grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
+
+        ttk.Label(size_frame, text="Height:").grid(row=2, column=0, sticky=tk.W, padx=5, pady=2)
+        self.custom_height_var = tk.IntVar()
+        self.height_spinbox = ttk.Spinbox(size_frame, from_=1, to=4096, textvariable=self.custom_height_var, state="disabled")
+        self.height_spinbox.grid(row=2, column=1, sticky=tk.W, padx=5, pady=2)
+
         convert_frame = ttk.Frame(main_frame)
         convert_frame.grid(row=2, column=1, sticky=(tk.W, tk.E, tk.S), padx=5, pady=5)
 
@@ -73,6 +94,14 @@ class SvgToGifConverter(tk.Tk):
 
         self.status_label = ttk.Label(convert_frame, text="Ready.")
         self.status_label.pack(pady=5, fill=tk.X)
+
+    def toggle_custom_size_fields(self):
+        if self.use_custom_size_var.get():
+            self.width_spinbox.config(state="normal")
+            self.height_spinbox.config(state="normal")
+        else:
+            self.width_spinbox.config(state="disabled")
+            self.height_spinbox.config(state="disabled")
 
     def select_svg_file(self):
         filepath = filedialog.askopenfilename(
@@ -87,6 +116,9 @@ class SvgToGifConverter(tk.Tk):
             if width and height:
                 self.size_label.config(text=f"Detected Size: {width} x {height}")
                 self.status_label.config(text="File selected. Ready to convert.")
+                # Set default values for custom size fields
+                self.custom_width_var.set(width)
+                self.custom_height_var.set(height)
             else:
                 self.size_label.config(text="Could not detect size.")
                 messagebox.showerror("SVG Error", "Could not determine the dimensions of the selected SVG file.")
@@ -118,10 +150,20 @@ class SvgToGifConverter(tk.Tk):
 
     def _conversion_thread(self, output_filepath):
         try:
-            width, height = self.get_svg_size(self.svg_filepath)
-            if not width or not height:
+            detected_width, detected_height = self.get_svg_size(self.svg_filepath)
+            if not detected_width or not detected_height:
                 self.update_status("Error: Could not determine SVG dimensions.")
                 return
+
+            if self.use_custom_size_var.get():
+                output_width = self.custom_width_var.get()
+                output_height = self.custom_height_var.get()
+            else:
+                output_width = detected_width
+                output_height = detected_height
+
+            # The browser window should be the size of the original SVG to render it correctly
+            render_width, render_height = detected_width, detected_height
 
             loop = self.loop_var.get()
             duration = self.duration_var.get()
@@ -129,12 +171,12 @@ class SvgToGifConverter(tk.Tk):
 
             temp_dir = tempfile.mkdtemp(prefix="svg2gif_")
 
-            render_success = self.render_frames(self.svg_filepath, temp_dir, width, height, duration, fps)
+            render_success = self.render_frames(self.svg_filepath, temp_dir, render_width, render_height, duration, fps)
             if not render_success:
                 self.update_status("Frame rendering failed.")
                 return
 
-            gif_success = self.create_gif(temp_dir, output_filepath, loop, duration, fps)
+            gif_success = self.create_gif(temp_dir, output_filepath, loop, duration, fps, output_width, output_height)
             if gif_success:
                 self.update_status("Conversion complete!")
                 self.after(0, lambda: messagebox.showinfo("Success", f"GIF saved to:\n{output_filepath}"))
@@ -221,13 +263,39 @@ class SvgToGifConverter(tk.Tk):
             self.update_status(f"Frame rendering failed: {e}")
             return False
 
-    def create_gif(self, frames_dir, output_path, loop, duration, fps):
+    def resize_and_paste_frame(self, frame_path, output_width, output_height):
+        try:
+            frame = Image.open(frame_path).convert("RGBA")
+
+            # Create a new white canvas of the target size
+            new_frame = Image.new("RGBA", (output_width, output_height), "WHITE")
+
+            # Calculate position to paste the original frame in the center
+            paste_x = (output_width - frame.width) // 2
+            paste_y = (output_height - frame.height) // 2
+
+            # Paste the original frame onto the new canvas
+            # The mask is the alpha channel of the frame itself to handle transparency
+            new_frame.paste(frame, (paste_x, paste_y), mask=frame)
+
+            # Save the modified frame, overwriting the original in the temp folder
+            new_frame.save(frame_path)
+            return True
+        except Exception as e:
+            self.update_status(f"Error resizing frame: {e}")
+            return False
+
+    def create_gif(self, frames_dir, output_path, loop, duration, fps, output_width, output_height):
         self.update_status("Assembling GIF...")
         try:
             files = sorted([os.path.join(frames_dir, f) for f in os.listdir(frames_dir) if f.endswith('.png')])
             if not files: return False
 
-            frames = [Image.open(f) for f in files]
+            frames = []
+            for f in files:
+                if not self.resize_and_paste_frame(f, output_width, output_height):
+                    return False # Stop if resizing fails for any frame
+                frames.append(Image.open(f))
 
             loop_count = 0 if loop == "Forever" else int(loop)
             frames[0].save(
