@@ -229,7 +229,8 @@ class SvgToGifConverter(tk.Tk):
         options.add_argument('--headless')
         options.add_argument('--no-sandbox')
         options.add_argument('--disable-dev-shm-usage')
-        options.add_argument(f'--window-size={width},{height}')
+        # Add some vertical padding to prevent browser chrome from cutting off the bottom
+        options.add_argument(f'--window-size={width},{height + 50}')
         try:
             service = ChromeService(ChromeDriverManager().install())
             driver = webdriver.Chrome(service=service, options=options)
